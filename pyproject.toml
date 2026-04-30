@@ -1,0 +1,28 @@
+[project]
+name = "othermonet"
+version = "0.1.0"
+description = "Local-only expense tracker for bank statement PDFs"
+readme = "README.md"
+authors = [
+    { name = "Mischa Ungermann", email = "mischa@dataworkz.de" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "duckdb>=1.5.2",
+    "fastapi>=0.136.1",
+    "jinja2>=3.1.6",
+    "uvicorn[standard]>=0.46.0",
+]
+
+[project.scripts]
+othermonet = "othermonet:main"
+
+[build-system]
+requires = ["uv_build>=0.11.8,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+]

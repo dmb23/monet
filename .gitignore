@@ -1,0 +1,5 @@
+data/expenses.db
+src/othermonet/__pycache__
+src/othermonet/static/js/.gitkeep
+tests/__pycache__
+.claude/settings.local.json
