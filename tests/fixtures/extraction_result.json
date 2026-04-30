@@ -1,0 +1,23 @@
+{
+  "account_iban": "DE89370400440532013000",
+  "opening_balance": 100000,
+  "closing_balance": 95000,
+  "transactions": [
+    {
+      "booking_date": "2024-02-03",
+      "value_date": "2024-02-04",
+      "amount_cents": -1599,
+      "description": "ALDI SUED",
+      "counterparty_iban": "DE33333333333333333333",
+      "counterparty_name": "ALDI SUED"
+    },
+    {
+      "booking_date": "2024-02-15",
+      "value_date": "2024-02-15",
+      "amount_cents": -3401,
+      "description": "Deutsche Bahn Ticket",
+      "counterparty_iban": "DE44444444444444444444",
+      "counterparty_name": "Deutsche Bahn AG"
+    }
+  ]
+}

@@ -1,5 +1,7 @@
 """FastAPI application for the expense tracker dashboard."""
 
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -8,12 +10,26 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .db import get_db, init_db
-from .seed import seed
+from .inbox import start_watcher
+from .seed import seed_if_empty
 
 PACKAGE_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=str(PACKAGE_DIR / "templates"))
 
-app = FastAPI(title="Othermonet")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    seed_if_empty()
+    observer = start_watcher()
+    try:
+        yield
+    finally:
+        observer.stop()
+        observer.join()
+
+
+app = FastAPI(title="Othermonet", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(PACKAGE_DIR / "static")), name="static")
 
 
@@ -50,9 +66,8 @@ def dashboard(request: Request):
 
 
 def main():
-    """Initialize the database, seed it, and run the FastAPI app via uvicorn."""
+    """Run the FastAPI app via uvicorn (DB init + watcher start happen in lifespan)."""
     import uvicorn
 
-    init_db()
-    seed()
+    logging.basicConfig(level=logging.INFO)
     uvicorn.run("othermonet.app:app", host="127.0.0.1", port=5000, reload=False)

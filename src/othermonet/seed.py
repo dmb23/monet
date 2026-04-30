@@ -10,6 +10,18 @@ def compute_fingerprint(account_id, booking_date, amount_cents, description):
     return hashlib.sha256(normalized.encode()).hexdigest()[:32]
 
 
+def seed_if_empty():
+    """Seed only if the accounts table is empty (idempotent across restarts)."""
+    con = get_db()
+    try:
+        already_seeded = con.execute("SELECT COUNT(*) FROM accounts").fetchone()[0] > 0
+    finally:
+        con.close()
+    if already_seeded:
+        return
+    seed()
+
+
 def seed():
     """Seed the database with one Account and several Transactions."""
     con = get_db()
@@ -95,4 +107,4 @@ if __name__ == "__main__":
     from . import db
 
     db.init_db()
-    seed()
+    seed_if_empty()
