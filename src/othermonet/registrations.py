@@ -22,8 +22,8 @@ log = logging.getLogger(__name__)
 
 
 _PARSERS = {
-    triodos_kontoauszug.DOCUMENT_TYPE: triodos_kontoauszug,
-    triodos_kreditkarte.DOCUMENT_TYPE: triodos_kreditkarte,
+    "triodos_kontoauszug": triodos_kontoauszug,
+    "triodos_kreditkarte": triodos_kreditkarte,
 }
 
 
