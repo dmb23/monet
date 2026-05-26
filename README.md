@@ -57,6 +57,33 @@ othermonet/
 └── pyproject.toml      # Project configuration (managed by uv)
 ```
 
+## Adding a new document type
+
+PDF extraction is per-document-type, code-driven (see ADR-0006). To support a
+new bank statement layout:
+
+1. **Write a parser module** at `src/othermonet/<bank>_<doctype>.py`. It must
+   expose a `DOCUMENT_TYPE` string constant and a
+   `parse(pdf_path: Path) -> ExtractionResult` function. Use the
+   [`triodos_kontoauszug`](src/othermonet/triodos_kontoauszug.py) module as
+   the worked example — it pins `camelot` table areas and column boundaries
+   to the Triodos Girokonto layout, parses the `Vorgang` column, and extracts
+   counterparty IBAN + name from SEPA-style entries.
+2. **Register it** in `src/othermonet/registrations.py` by adding it to the
+   `_PARSERS` dict.
+3. **Add an `[[account]]` entry** to `accounts.toml` (copy from
+   `accounts.toml.example`) binding a filename pattern + the new parser name
+   + the account's IBAN and metadata. Multiple `[[account]]` entries may
+   share the same parser (e.g. Girokonto + Sparkonto both use
+   `triodos_kontoauszug`).
+4. **Pin a fixture test** at `tests/test_<parser>.py` — load a real sample
+   PDF (committed to `data/`) and assert period, opening/closing balances,
+   transaction count, and that `reconciliation.validate(result).ok`.
+
+Failed PDFs (unknown filename, parser exception, or non-reconciling
+balances) stay in the Inbox with a sidecar `.error.json` describing the
+failure. The dashboard banner counts them all.
+
 ## Tech Stack
 
 - **Backend**: Python 3.12+, FastAPI (uvicorn)

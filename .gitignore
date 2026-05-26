@@ -4,3 +4,5 @@ src/othermonet/static/js/.gitkeep
 tests/__pycache__
 .claude/settings.local.json
 data
+.DS_Store
+session

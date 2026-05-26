@@ -9,9 +9,12 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .config import inbox_dir
 from .db import get_db, init_db
-from .inbox import start_watcher
-from .seed import seed_if_empty
+from .inbox import process_existing, start_watcher
+from .registrations import load_registrations, reconcile_accounts_table
+
+log = logging.getLogger(__name__)
 
 PACKAGE_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=str(PACKAGE_DIR / "templates"))
@@ -20,8 +23,10 @@ templates = Jinja2Templates(directory=str(PACKAGE_DIR / "templates"))
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    seed_if_empty()
-    observer = start_watcher()
+    registrations = load_registrations()
+    reconcile_accounts_table(registrations)
+    process_existing(registrations)
+    observer = start_watcher(registrations)
     try:
         yield
     finally:
@@ -33,9 +38,21 @@ app = FastAPI(title="Othermonet", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(PACKAGE_DIR / "static")), name="static")
 
 
+def _count_needs_review() -> int:
+    """`statements.status = 'needs_review'` rows plus stranded `.error.json` sidecars."""
+    con = get_db()
+    try:
+        statement_count = con.execute(
+            "SELECT COUNT(*) FROM statements WHERE status = 'needs_review'"
+        ).fetchone()[0]
+    finally:
+        con.close()
+    sidecar_count = sum(1 for _ in inbox_dir().glob("*.error.json"))
+    return statement_count + sidecar_count
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
-    """Render the dashboard page listing all Transactions."""
     con = get_db()
     rows = con.execute(
         """SELECT t.id, t.booking_date, t.description, t.amount_cents,
@@ -61,12 +78,16 @@ def dashboard(request: Request):
     ]
 
     return templates.TemplateResponse(
-        request, "dashboard.html", {"transactions": transactions}
+        request,
+        "dashboard.html",
+        {
+            "transactions": transactions,
+            "needs_review_count": _count_needs_review(),
+        },
     )
 
 
 def main():
-    """Run the FastAPI app via uvicorn (DB init + watcher start happen in lifespan)."""
     import uvicorn
 
     logging.basicConfig(level=logging.INFO)

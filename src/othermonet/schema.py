@@ -9,8 +9,13 @@ CREATE SEQUENCE IF NOT EXISTS seq_category_history_id START 1;
 CREATE TABLE IF NOT EXISTS accounts (
     id BIGINT PRIMARY KEY DEFAULT nextval('seq_accounts_id'),
     iban TEXT UNIQUE NOT NULL,
-    owner TEXT NOT NULL
+    owner TEXT NOT NULL,
+    account_name TEXT,
+    bank_name TEXT
 );
+
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS account_name TEXT;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS bank_name TEXT;
 
 CREATE TABLE IF NOT EXISTS categories (
     id BIGINT PRIMARY KEY DEFAULT nextval('seq_categories_id'),
@@ -25,10 +30,11 @@ CREATE TABLE IF NOT EXISTS statements (
     period_end TEXT NOT NULL,
     opening_balance INTEGER NOT NULL,
     closing_balance INTEGER NOT NULL,
-    needs_review BOOLEAN DEFAULT FALSE,
+    status TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok', 'needs_review')),
     processed_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+ALTER TABLE statements ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ok';
 
 CREATE TABLE IF NOT EXISTS transactions (
     id BIGINT PRIMARY KEY DEFAULT nextval('seq_transactions_id'),
@@ -46,6 +52,8 @@ CREATE TABLE IF NOT EXISTS transactions (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(account_id, fingerprint)
 );
+
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS statement_id BIGINT;
 
 CREATE TABLE IF NOT EXISTS merchant_memory (
     id BIGINT PRIMARY KEY DEFAULT nextval('seq_merchant_memory_id'),

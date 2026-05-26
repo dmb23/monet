@@ -54,10 +54,24 @@
             padding: 2rem;
             color: #6c757d;
         }
+        .banner {
+            background: #fff3cd;
+            border: 1px solid #ffeeba;
+            color: #856404;
+            padding: 0.75rem 1rem;
+            margin-bottom: 1rem;
+            border-radius: 4px;
+        }
     </style>
 </head>
 <body>
     <h1>Expense Tracker Dashboard</h1>
+
+    {% if needs_review_count %}
+    <div class="banner">
+        {{ needs_review_count }} statement{{ '' if needs_review_count == 1 else 's' }} need review.
+    </div>
+    {% endif %}
 
     {% if transactions %}
     <table>
