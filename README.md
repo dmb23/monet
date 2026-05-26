@@ -77,7 +77,8 @@ new bank statement layout:
    share the same parser (e.g. Girokonto + Sparkonto both use
    `triodos_kontoauszug`).
 4. **Pin a fixture test** at `tests/test_<parser>.py` — load a real sample
-   PDF (committed to `data/`) and assert period, opening/closing balances,
+   PDF placed in `tests/fixtures/pdfs/` (gitignored; the test skips when
+   the file is missing) and assert period, opening/closing balances,
    transaction count, and that `reconciliation.validate(result).ok`.
 
 Failed PDFs (unknown filename, parser exception, or non-reconciling

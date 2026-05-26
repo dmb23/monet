@@ -1,0 +1,28 @@
+# Account Registrations. Copy to `accounts.toml` and edit for your accounts.
+#
+# Each [[account]] entry binds:
+#   filename_pattern  regex matched against the inbox PDF's filename
+#   parser            name of the per-document-type parser module
+#   iban              the IBAN this filename pattern belongs to
+#   account_name      friendly name shown in the dashboard
+#   owner_label       free-form label (e.g. "Anna", "Anna+Ben"); see ADR-0002
+#   bank_name         displayed alongside the account
+#
+# Multiple registrations may share one parser (e.g. Girokonto + Sparkonto
+# both use triodos_kontoauszug).
+
+[[account]]
+filename_pattern = '^NNNNNNNN_.*Kontoauszug.*\.pdf$'
+parser           = "triodos_kontoauszug"
+iban             = "ABNNNNNNNNNNNNNNNNNN"
+account_name     = "Triodos Girokonto"
+owner_label      = "Mischa"
+bank_name        = "Triodos Bank"
+
+[[account]]
+filename_pattern = '^.*Kreditkarten-Umsatzaufstellung.*\.pdf$'
+parser           = "triodos_kreditkarte"
+iban             = "ABNNNNNNNNNNNNNNNNNNNN"
+account_name     = "Triodos Mastercard"
+owner_label      = "Mischa"
+bank_name        = "Triodos Bank"

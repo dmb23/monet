@@ -6,3 +6,7 @@ tests/__pycache__
 data
 .DS_Store
 session
+accounts.toml
+accounts.toml.scratch
+tests/fixtures/pdfs/
+tests/fixtures/__pycache__
