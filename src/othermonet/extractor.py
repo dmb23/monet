@@ -26,9 +26,10 @@ from typing import Any
 from .config import archive_dir
 from .db import get_db
 from .extraction import ExtractionResult
+from .fingerprint import Fingerprinter, compute_file_sha256
+from .kind import KindClassifier
 from .reconciliation import Outcome, validate
 from .registrations import Registration, match_registration
-from .seed import compute_fingerprint
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +45,11 @@ def ingest_pdf(pdf_path: Path, registrations: list[Registration]) -> dict[str, A
     Failures write a sidecar `.error.json` next to the PDF and raise
     `IngestError`. The PDF is only moved on the success path.
     """
+    file_sha256 = compute_file_sha256(pdf_path)
+    existing = _existing_statement_for_sha256(file_sha256)
+    if existing is not None:
+        return _handle_already_imported(pdf_path, file_sha256, existing)
+
     reg = match_registration(pdf_path.name, registrations)
     if reg is None:
         _write_error(
@@ -95,7 +101,9 @@ def ingest_pdf(pdf_path: Path, registrations: list[Registration]) -> dict[str, A
             f"reconciliation failed for {pdf_path.name}: diff_cents={outcome.diff_cents}"
         )
 
-    statement_id = _commit_statement(pdf_path, reg, result)
+    statement_id, imported, skipped = _commit_statement(
+        pdf_path, reg, result, file_sha256, registrations
+    )
 
     dest_dir = archive_dir() / str(result.period_end.year) / reg.owner_label
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -108,16 +116,20 @@ def ingest_pdf(pdf_path: Path, registrations: list[Registration]) -> dict[str, A
         "owner": reg.owner_label,
         "document_type": reg.document_type,
         "statement_id": statement_id,
-        "transactions_committed": len(result.transactions),
+        "transactions_extracted": len(result.transactions),
+        "transactions_imported": imported,
+        "duplicates_skipped": skipped,
+        "summary": f"{imported} imported, {skipped} duplicates skipped",
         "archived_to": str(archived),
     }
     archived.with_suffix(archived.suffix + ".report.json").write_text(
         json.dumps(report, indent=2)
     )
     log.info(
-        "ingested %s: %d transactions for %s",
+        "ingested %s: %d imported, %d duplicates skipped for %s",
         pdf_path.name,
-        len(result.transactions),
+        imported,
+        skipped,
         reg.owner_label,
     )
     return report
@@ -152,9 +164,18 @@ def _lookup_account_id(con, iban: str) -> int:
 
 
 def _commit_statement(
-    pdf_path: Path, reg: Registration, result: ExtractionResult
-) -> int:
-    """Insert one statements row and N transactions atomically. Returns statement_id."""
+    pdf_path: Path,
+    reg: Registration,
+    result: ExtractionResult,
+    file_sha256: str,
+    registrations: list[Registration],
+) -> tuple[int, int, int]:
+    """Insert one statements row and its transactions atomically.
+
+    Returns (statement_id, imported_count, skipped_duplicates). Transactions
+    whose `(account_id, fingerprint)` already exists in `transactions` are
+    silently skipped — they are the overlapping-statement case from issue 05.
+    """
     con = get_db()
     try:
         con.execute("BEGIN")
@@ -162,8 +183,9 @@ def _commit_statement(
         statement_id = con.execute(
             """INSERT INTO statements
                   (account_id, filename, period_start, period_end,
-                   opening_balance, closing_balance, status, processed_at)
-               VALUES (?, ?, ?, ?, ?, ?, 'ok', CURRENT_TIMESTAMP)
+                   opening_balance, closing_balance, status, processed_at,
+                   source_file_sha256)
+               VALUES (?, ?, ?, ?, ?, ?, 'ok', CURRENT_TIMESTAMP, ?)
                RETURNING id""",
             [
                 account_id,
@@ -172,16 +194,35 @@ def _commit_statement(
                 result.period_end.isoformat(),
                 result.opening_balance_cents,
                 result.closing_balance_cents,
+                file_sha256,
             ],
         ).fetchone()[0]
 
+        existing_fps = {
+            row[0]
+            for row in con.execute(
+                "SELECT fingerprint FROM transactions WHERE account_id = ?",
+                [account_id],
+            ).fetchall()
+        }
+
+        own_ibans = {r.iban for r in registrations}
+        imported = 0
+        skipped = 0
         for t in result.transactions:
-            fingerprint = compute_fingerprint(
-                account_id,
-                t.booking_date.isoformat(),
-                t.amount_cents,
-                t.description,
+            fp = Fingerprinter.fingerprint(
+                account_id, t.booking_date, t.amount_cents, t.description
             )
+            if fp in existing_fps:
+                skipped += 1
+                log.info(
+                    "dedup: skipping %s %s %d (fingerprint already seen)",
+                    pdf_path.name,
+                    t.booking_date.isoformat(),
+                    t.amount_cents,
+                )
+                continue
+            existing_fps.add(fp)
             con.execute(
                 """INSERT INTO transactions
                       (statement_id, account_id, fingerprint, booking_date, value_date,
@@ -191,23 +232,71 @@ def _commit_statement(
                 [
                     statement_id,
                     account_id,
-                    fingerprint,
+                    fp,
                     t.booking_date.isoformat(),
                     t.value_date.isoformat() if t.value_date else None,
                     t.amount_cents,
                     t.description,
                     t.counterparty_iban,
                     t.counterparty_name,
-                    "Income" if t.amount_cents > 0 else "Expense",
+                    KindClassifier.classify(t, own_ibans),
                 ],
             )
+            imported += 1
         con.execute("COMMIT")
-        return statement_id
+        return statement_id, imported, skipped
     except Exception:
         con.execute("ROLLBACK")
         raise
     finally:
         con.close()
+
+
+def _existing_statement_for_sha256(sha256: str) -> dict[str, Any] | None:
+    con = get_db()
+    try:
+        row = con.execute(
+            """SELECT id, filename, account_id
+                 FROM statements
+                WHERE source_file_sha256 = ?
+                ORDER BY id LIMIT 1""",
+            [sha256],
+        ).fetchone()
+    finally:
+        con.close()
+    if row is None:
+        return None
+    return {"statement_id": row[0], "filename": row[1], "account_id": row[2]}
+
+
+def _handle_already_imported(
+    pdf_path: Path, sha256: str, existing: dict[str, Any]
+) -> dict[str, Any]:
+    """Re-uploaded PDF: skip parsing entirely, archive the duplicate file."""
+    dest_dir = archive_dir() / "duplicates"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    archived = dest_dir / pdf_path.name
+    if archived.exists():
+        archived = dest_dir / f"{pdf_path.stem}.{sha256[:8]}{pdf_path.suffix}"
+    shutil.move(str(pdf_path), archived)
+    report = {
+        "file": pdf_path.name,
+        "status": "duplicate_statement",
+        "source_file_sha256": sha256,
+        "matched_statement_id": existing["statement_id"],
+        "matched_filename": existing["filename"],
+        "summary": "0 imported, 0 duplicates skipped (file already imported)",
+        "archived_to": str(archived),
+    }
+    archived.with_suffix(archived.suffix + ".report.json").write_text(
+        json.dumps(report, indent=2)
+    )
+    log.info(
+        "duplicate statement skipped: %s (matches statement_id=%s)",
+        pdf_path.name,
+        existing["statement_id"],
+    )
+    return report
 
 
 def _record_needs_review_statement(

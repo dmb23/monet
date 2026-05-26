@@ -195,7 +195,8 @@ def test_happy_path_commits_and_archives(env):
     ]
     report = ingest_pdf(src, regs)
 
-    assert report["transactions_committed"] == 25
+    assert report["transactions_imported"] == 25
+    assert report["duplicates_skipped"] == 0
     assert not src.exists()
     archived = env["archive"] / "2026" / "Mischa" / GIRO_PDF.name
     assert archived.exists()

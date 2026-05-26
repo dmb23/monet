@@ -54,6 +54,17 @@
             padding: 2rem;
             color: #6c757d;
         }
+        .totals {
+            background: white;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 2rem;
+            align-items: center;
+        }
+        .totals small { color: #6c757d; margin-left: auto; }
         .banner {
             background: #fff3cd;
             border: 1px solid #ffeeba;
@@ -66,6 +77,7 @@
 </head>
 <body>
     <h1>Expense Tracker Dashboard</h1>
+    <nav style="margin-bottom:1rem;"><a href="/categories">Manage categories</a></nav>
 
     {% if needs_review_count %}
     <div class="banner">
@@ -74,6 +86,12 @@
     {% endif %}
 
     {% if transactions %}
+    <div class="totals">
+        <span><strong>Income:</strong> <span class="income">{{ totals.income }}</span></span>
+        <span><strong>Spend:</strong> <span class="expense">{{ totals.spend }}</span></span>
+        <span><strong>Net:</strong> {{ totals.net }}</span>
+        <small>Transfers excluded from totals.</small>
+    </div>
     <table>
         <thead>
             <tr>
@@ -81,18 +99,13 @@
                 <th>Description</th>
                 <th>Amount</th>
                 <th>Kind</th>
+                <th>Category</th>
                 <th>Account</th>
             </tr>
         </thead>
         <tbody>
             {% for txn in transactions %}
-            <tr>
-                <td>{{ txn.booking_date }}</td>
-                <td>{{ txn.description }}</td>
-                <td class="{{ txn.kind.lower() }}">{{ txn.amount }}</td>
-                <td>{{ txn.kind }}</td>
-                <td>{{ txn.owner }} ({{ txn.iban[:6] }}...{{ txn.iban[-4:] }})</td>
-            </tr>
+                {% include "_row.html" %}
             {% endfor %}
         </tbody>
     </table>

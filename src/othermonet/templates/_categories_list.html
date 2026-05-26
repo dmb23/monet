@@ -1,0 +1,17 @@
+<ul id="categories-list">
+    {% for c in categories %}
+    <li>
+        {% if c.name == uncategorized %}
+        <span class="locked">{{ c.name }} (locked)</span>
+        {% else %}
+        <form hx-post="/categories/{{ c.id }}/rename" hx-target="#categories-list" hx-swap="outerHTML">
+            <input name="name" value="{{ c.name }}" required>
+            <button type="submit">Rename</button>
+        </form>
+        <form hx-post="/categories/{{ c.id }}/delete" hx-target="#categories-list" hx-swap="outerHTML" hx-confirm="Delete {{ c.name }}?">
+            <button type="submit">Delete</button>
+        </form>
+        {% endif %}
+    </li>
+    {% endfor %}
+</ul>

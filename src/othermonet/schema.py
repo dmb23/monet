@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS statements (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ALTER TABLE statements ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ok';
+ALTER TABLE statements ADD COLUMN IF NOT EXISTS source_file_sha256 TEXT;
+CREATE INDEX IF NOT EXISTS idx_statements_sha256 ON statements(source_file_sha256);
 
 CREATE TABLE IF NOT EXISTS transactions (
     id BIGINT PRIMARY KEY DEFAULT nextval('seq_transactions_id'),

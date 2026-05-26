@@ -1,0 +1,36 @@
+<tr id="txn-{{ txn.id }}">
+    <td>{{ txn.booking_date }}</td>
+    <td>
+        {{ txn.description }}
+        {% if txn.counterparty_name or txn.counterparty_iban %}
+        <small>{{ txn.counterparty_name or '' }} {% if txn.counterparty_iban %}({{ txn.counterparty_iban }}){% endif %}</small>
+        {% endif %}
+    </td>
+    <td class="{{ txn.kind.lower() }}">{{ txn.amount }}</td>
+    <td>
+        <form hx-post="/transactions/{{ txn.id }}/kind"
+              hx-target="#txn-{{ txn.id }}"
+              hx-swap="outerHTML"
+              hx-trigger="change from:select">
+            <select name="kind">
+                {% for choice in kind_choices %}
+                <option value="{{ choice }}"{% if choice == txn.kind %} selected{% endif %}>{{ choice }}</option>
+                {% endfor %}
+            </select>
+        </form>
+    </td>
+    <td>
+        <form hx-post="/transactions/{{ txn.id }}/category"
+              hx-target="#txn-{{ txn.id }}"
+              hx-swap="outerHTML"
+              hx-trigger="change from:select">
+            <select name="category_id">
+                <option value=""{% if not txn.category_id %} selected{% endif %}>—</option>
+                {% for c in categories %}
+                <option value="{{ c.id }}"{% if c.id == txn.category_id %} selected{% endif %}>{{ c.name }}</option>
+                {% endfor %}
+            </select>
+        </form>
+    </td>
+    <td>{{ txn.owner }} ({{ txn.iban[:6] }}...{{ txn.iban[-4:] }})</td>
+</tr>

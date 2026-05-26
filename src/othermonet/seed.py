@@ -1,13 +1,41 @@
 """Seed the database with sample data for development."""
 
-import hashlib
 from .db import get_db
+from .fingerprint import Fingerprinter
+
+UNCATEGORIZED = "Uncategorized"
+STARTER_CATEGORIES = (
+    "Groceries",
+    "Rent",
+    "Utilities",
+    "Transport",
+    "Dining Out",
+    "Entertainment",
+    "Healthcare",
+    "Salary",
+    "Subscriptions",
+    "Cash",
+    "Other",
+)
+
+
+def seed_categories() -> None:
+    """Idempotently insert Uncategorized + the starter set. Safe to call every boot."""
+    con = get_db()
+    try:
+        for name in (UNCATEGORIZED, *STARTER_CATEGORIES):
+            existing = con.execute(
+                "SELECT 1 FROM categories WHERE name = ?", [name]
+            ).fetchone()
+            if existing is None:
+                con.execute("INSERT INTO categories (name) VALUES (?)", [name])
+    finally:
+        con.close()
 
 
 def compute_fingerprint(account_id, booking_date, amount_cents, description):
-    """Compute a deterministic fingerprint for a transaction."""
-    normalized = f"{account_id}:{booking_date}:{amount_cents}:{description.lower().strip()}"
-    return hashlib.sha256(normalized.encode()).hexdigest()[:32]
+    """Back-compat wrapper around `Fingerprinter.fingerprint`."""
+    return Fingerprinter.fingerprint(account_id, booking_date, amount_cents, description)
 
 
 def seed_if_empty():
