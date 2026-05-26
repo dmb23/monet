@@ -16,14 +16,16 @@ Categorization runs *after* the Reconciliation Gate passes and Transactions are 
 
 The work queue is a DuckDB table — no Redis, no Celery, no separate service. The worker can be in-process (a thread or task started alongside the web server) or a separate process; either is fine. It must be durable across restarts: pending work is the set of `category_id IS NULL` non-Transfer Transactions, recovered from the DB at startup.
 
-The LLM is reached through the existing `LLMPort` (introduced in slice 03), so the same vLLM adapter is reused. `CategoryResolver` is the module that owns the categorization pipeline; in this slice it consists of a single LLM call (Merchant Memory arrives in slice 09).
+This slice introduces the `LLMPort` interface and ships its single v1 implementation: a neutral `OpenAICompatibleLLMAdapter` that reads a base URL and a model name from config and POSTs to `/v1/chat/completions`. Any runtime that speaks the OpenAI Chat Completions API works; that choice is a deployment concern handled in the README, not a code-level commitment. The seam is what story #35 promises; per [ADR-0006](../../../docs/adr/0006-pdf-extraction-is-per-document-type.md) the LLM is used only for categorization, never for extraction.
+
+`CategoryResolver` is the module that owns the categorization pipeline; in this slice it consists of a single LLM call (Merchant Memory arrives in slice 09).
 
 This slice is HITL because the prompt design (how the LLM is told to constrain its output to the current Category list) and the worker architecture both need human review before merge.
 
 ## Acceptance criteria
 
 - [ ] Background worker started alongside the web server; picks up `category_id IS NULL AND kind != 'Transfer'` Transactions
-- [ ] LLM call uses the existing `LLMPort`; the v1 vLLM adapter is reused
+- [ ] `LLMPort` interface is defined in this slice; `OpenAICompatibleLLMAdapter` is the v1 implementation (base URL + model name read from config; no runtime-specific code)
 - [ ] Prompt is constrained: the LLM MUST return a name from the current Category list or the literal string `Uncategorized`; any other response falls back to `Uncategorized`
 - [ ] `CategoryResolver.resolve(transaction, *, llm: LLMPort) → (category_id, source: 'llm')` is the single entry point; no Memory layer yet
 - [ ] Worker is durable: a process restart with pending work resumes processing without manual intervention

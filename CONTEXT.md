@@ -13,8 +13,16 @@ A free-form string label on an **Account** identifying which person that account
 _Avoid_: Person, User, Holder
 
 **Statement**:
-A single PDF file representing one bank-issued account summary, covering a date range. Statements are the unit of ingestion.
+A single PDF file representing one bank-issued account summary, covering a date range. Statements are the unit of ingestion. Every Statement is of exactly one **Document Type**, which determines how it is parsed.
 _Avoid_: Document, Sheet, Report
+
+**Document Type**:
+A `(bank, statement_format)` pair (e.g. `triodos.girokonto`, `triodos.kreditkarte`) identifying one PDF layout. Each Document Type is handled by one parser module. A single bank can emit several Document Types (a Girokonto statement and a credit card statement look nothing alike); conversely, a single parser module can serve multiple **Account Registrations** when several Accounts share the same layout (e.g. a current account and a savings account at the same bank).
+_Avoid_: Format, Template, Layout
+
+**Account Registration**:
+A configured binding `(filename_pattern, parser_module, iban, account_name, owner_label)` declared in `accounts.toml` and loaded at startup. Each registration tells the ingest pipeline: "PDFs whose filename matches this pattern belong to this Account, and should be parsed by this module." Adding a new **Account** is a config edit (and, if the bank's format is new, a new parser module), not a UI flow.
+_Avoid_: Mapping, Binding, Profile
 
 **Transaction**:
 A single line item parsed out of a **Statement** — one debit or credit on an **Account**. The atomic unit of analysis. Uniquely identified by a **Fingerprint** computed at ingest.
@@ -29,7 +37,12 @@ A pre-commit check applied to every parsed **Statement**: `opening_balance + sum
 _Avoid_: Validation, Verification, Check
 
 **Needs Review**:
-A state on a **Statement** indicating it failed the **Reconciliation Gate**. Realised in practice as: the PDF stays in the **Inbox** with a sidecar `.error.json` describing the diff. The user resolves it by re-triggering ingest (after a transient failure) or by patching the LLM prompt / adding a hand-rolled parser, then re-dropping the file. No Transactions from a Needs Review Statement are visible in the dashboard.
+A state on a **Statement** (or on a Statement-shaped attempt) indicating ingest did not complete. Three failure modes share this state and the same sidecar `.error.json` shape, distinguished by an `error_type` field:
+- `unknown_document_type` — no **Account Registration** filename pattern matched the PDF.
+- `parser_error` — the parser module ran but raised (e.g. unexpected column count, unparseable row).
+- `reconciliation_failed` — the parser ran cleanly but `opening + sum(transactions) != closing`. Includes `expected_closing`, `computed`, `diff_eur`, `transactions_extracted`.
+
+In all three cases the PDF stays in the **Inbox** alongside the sidecar; no Transactions are committed. The user resolves it by adjusting `accounts.toml`, extending the parser module to cover the edge case, or re-dropping the file after a transient fix. No Transactions from a Needs Review Statement are visible in the dashboard.
 _Avoid_: Failed, Error, Pending
 
 **Inbox**:
@@ -64,7 +77,10 @@ _Avoid_: Rule, Heuristic, Auto-categorizer
 
 - An **Account** has exactly one **Owner** label
 - An **Account** is uniquely identified by its IBAN
-- A **Statement** belongs to exactly one **Account**
+- An **Account** has exactly one **Account Registration** in `accounts.toml`
+- A **Statement** belongs to exactly one **Account** (resolved via its Account Registration)
+- A **Statement** has exactly one **Document Type**
+- A **Document Type** is served by exactly one parser module; a parser module may serve several Document Types only when their layouts are truly identical (one parser, many registrations is the more common case)
 - A **Statement** contains zero or more **Transactions**
 - A **Transaction** has exactly one **Kind**
 - A **Transaction** has zero or one **Category** (zero when Kind is Transfer or Refund)

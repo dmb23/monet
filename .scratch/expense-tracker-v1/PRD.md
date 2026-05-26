@@ -8,13 +8,13 @@ Tracking expenses across several bank accounts (potentially belonging to differe
 
 ## Solution
 
-A local-only Python application that watches a folder for bank statement PDFs, parses them with a locally-running LLM, validates each statement against its own opening/closing balance, stores the resulting transactions in DuckDB, and surfaces categorized spending through a server-rendered web dashboard. No data leaves the user's machine. Categorization runs asynchronously after ingest using the same local LLM, with a deterministic Merchant Memory layer that learns from manual corrections so the LLM only handles unseen counterparties.
+A local-only Python application that watches a folder for bank statement PDFs, parses them with per-document-type extractors built on `camelot`, validates each statement against its own opening/closing balance, stores the resulting transactions in DuckDB, and surfaces categorized spending through a server-rendered web dashboard. No data leaves the user's machine. Categorization runs asynchronously after ingest using a local LLM, with a deterministic Merchant Memory layer that learns from manual corrections so the LLM only handles unseen counterparties.
 
 ## User Stories
 
 1. As a household tracker, I want to drop a bank statement PDF into a configured folder, so that the file gets processed without my having to open the app first.
-2. As a household tracker, I want the system to identify which Account a PDF belongs to by extracting the IBAN, so that I do not have to label uploads manually.
-3. As a household tracker, I want to be prompted to register a new Account the first time an unknown IBAN appears, so that onboarding a new account is a single step.
+2. As a household tracker, I want the system to identify which Account a PDF belongs to by matching its filename against a configured Account Registration, so that I do not have to label uploads manually.
+3. As a household tracker, I want to register a new Account by adding an entry to `accounts.toml` (filename pattern, parser, IBAN, account name, owner label), so that onboarding a new account is one explicit step before its first PDF arrives.
 4. As a household tracker, I want each Account to carry an Owner label, so that I can filter the dashboard to "what Anna spent" or "what Ben spent".
 5. As a household tracker, I want every parsed Statement to be validated against its printed opening and closing balances, so that silent extraction errors do not poison my dashboard data.
 6. As a household tracker, I want a Statement that fails reconciliation to leave none of its Transactions committed, so that I never see partial or corrupted data on the dashboard.
@@ -46,7 +46,7 @@ A local-only Python application that watches a folder for bank statement PDFs, p
 32. As a household tracker, I want to filter the dashboard by Owner, Account, Kind, Category, Counterparty, and date range, so that I can answer specific questions like "what has Anna spent on groceries this year".
 33. As a household tracker, I want to drill down from any Category in the dashboard into the underlying Transaction list, so that I can verify the breakdown against actual transactions.
 34. As a household tracker, I want the application to run entirely on my local machine, so that no financial information leaves my device.
-35. As a household tracker, I want the local LLM to be replaceable behind a single port, so that I can swap models or runtimes without rewriting the categorization or extraction logic.
+35. As a household tracker, I want the local LLM used for categorization to be replaceable behind a single port, so that I can swap models or runtimes (anything that speaks the OpenAI-compatible HTTP API) without rewriting the categorization logic.
 
 ## Implementation Decisions
 
@@ -54,26 +54,36 @@ A local-only Python application that watches a folder for bank statement PDFs, p
 
 - **Language:** Python.
 - **Storage:** DuckDB (single-file, embedded; well-suited to analytical dashboard queries).
-- **Local LLM runtime:** vLLM, exposed via its OpenAI-compatible HTTP API. Requires CUDA-capable GPU as a hardware prerequisite — flag this in setup docs.
+- **Local LLM (categorization only):** any OpenAI-compatible HTTP endpoint. The project ships one neutral `OpenAICompatibleLLMAdapter` that takes a base URL and a model name from config; choice of runtime is a deployment concern, not a code concern. Recommendation of a specific model/runtime is deferred until v1 is feature-complete (see Further Notes).
 - **Web framework:** Server-rendered (e.g. FastAPI or Flask) + HTMX for interactivity. No SPA, no separate frontend codebase.
-- **PDF text extraction:** `pdfplumber` or `pypdf` for the raw text-extraction step that feeds the LLM.
+- **PDF extraction:** `camelot` with per-document-type hand-tuned `table_areas` + `columns`. See ADR-0006.
 - **File watching:** `watchdog` library.
+
+### v1 in-scope document types
+
+| Document Type | Parser module | Sample registrations in v1 |
+|---|---|---|
+| `triodos.girokonto` | `triodos_kontoauszug` | Triodos Girokonto, Triodos Sparkonto (same parser, different IBANs) |
+| `triodos.kreditkarte` | `triodos_kreditkarte` | Triodos Mastercard |
+
+Additional document types are post-v1 work and follow the same module pattern: a new parser file, golden-file fixtures, a registration entry in `accounts.toml`.
 
 ### Module decomposition
 
 Deep modules (small interfaces, big internals, tested in isolation):
 
-- **`PDFExtractor`** — `extract(pdf_bytes) → ExtractionResult { account_iban, opening_balance, closing_balance, transactions[] }`. v1 has a single `LLMExtractor` implementation; future per-bank parsers slot in behind the same interface. The LLM is reached through an injected `LLMPort`, which is what makes vLLM swappable.
+- **`PDFExtractor`** — a thin dispatcher: `extract(pdf_path) → ExtractionResult`. It matches the filename against the Account Registrations in `accounts.toml`, picks the registered parser, runs it, and stamps the registration's IBAN onto the result. The dispatcher knows nothing about layouts; parsers know nothing about IBANs. Per-document-type parser modules (`triodos_kontoauszug`, `triodos_kreditkarte`, …) live alongside it and conform to a single internal contract.
+  - `ExtractionResult` shape: `{ document_type, iban, period_start, period_end, opening_balance_cents, closing_balance_cents, transactions[] }` where each transaction is `{ booking_date, value_date?, amount_cents (signed), description, counterparty_iban?, counterparty_name? }`. Parsers are expected to populate `counterparty_iban` and `counterparty_name` whenever the PDF actually carries them (SEPA-style entries); they remain nullable for cash withdrawals, fees, interest, and other entries the bank prints without a counterparty.
 - **`ReconciliationValidator`** — `validate(ExtractionResult) → Outcome`. Pure function. Implements ADR-0001 (binary commit semantics).
 - **`Fingerprinter`** — `fingerprint(account_id, booking_date, amount_minor, description) → str`. Pure function. Owns the description-normalization rule.
 - **`CounterpartyKeyNormalizer`** — `key(iban?, name) → str`. Pure function. Used by both `Fingerprinter` and the Merchant Memory lookup. Normalization rules (lowercase, collapse whitespace, strip common legal-form suffixes when no IBAN is present) live here exclusively.
 - **`KindClassifier`** — `classify(transaction, own_account_ibans) → Kind`. Pure function implementing the sign rule + IBAN-match override pipeline from CONTEXT.md.
-- **`CategoryResolver`** — `resolve(transaction, *, memory: MerchantMemoryPort, llm: LLMPort) → (category, source)`. Implements the Merchant-Memory-first / LLM-fallback pipeline. Both ports are injected, so this module can be tested with simple stubs.
+- **`CategoryResolver`** — `resolve(transaction, *, memory: MerchantMemoryPort, llm: LLMPort) → (category, source)`. Implements the Merchant-Memory-first / LLM-fallback pipeline. Both ports are injected, so this module can be tested with simple stubs. `LLMPort` is the only seam where the LLM enters v1; it is *not* used for extraction (see ADR-0006).
 
 Coordination / plumbing modules:
 
 - **`IngestionOrchestrator`** — chains: extract → reconcile → dedup → kind classify → commit → enqueue categorization. Returns an `IngestOutcome` of `committed` or `needs_review`.
-- **`InboxWatcher`** — emits new-file events; manages sidecar `.error.json`; performs the move to the Processed Archive on success and back to Inbox on Reingest.
+- **`InboxWatcher`** — emits new-file events; manages sidecar `.error.json` (with `error_type` ∈ `{unknown_document_type, parser_error, reconciliation_failed}`); performs the move to the Processed Archive on success and back to Inbox on Reingest.
 - **`Repositories`** — one per entity (`Account`, `Statement`, `Transaction`, `Category`, `MerchantMemory`, `CategoryHistory`), each thinly wrapping DuckDB.
 - **`WebUI`** — dashboard, Category editor, manual `Category`/`Kind` overrides, Reingest Statement action.
 
@@ -95,6 +105,7 @@ Tables (column lists are indicative, not exhaustive):
 - **ADR-0003:** Merchant Memory is deterministic memoization; the LLM is never fine-tuned on user corrections. Memory updates only on first manual correction per Counterparty.
 - **ADR-0004:** Only `Category` and `Kind` are editable post-ingest. All other corrections go through Reingest Statement.
 - **ADR-0005:** EU/SEPA-only: hardcoded EUR currency and IBAN-as-identity are intentional, not oversights.
+- **ADR-0006:** PDF extraction is per-document-type and code-driven (camelot + hand-tuned layout coords), not model-driven. Model-based parsers were prototyped and rejected on accuracy grounds in May 2026.
 
 ### Asynchronous categorization
 
@@ -116,7 +127,8 @@ No browser-driven or end-to-end tests in v1. The web UI is exercised by manual u
 
 | Module | Test priority | Test shape |
 |---|---|---|
-| `PDFExtractor` | High | Golden-file fixtures: real PDFs from each in-scope bank, expected `ExtractionResult` checked into the repo. Run against the real LLM in a smoke job; against a recorded LLM response in unit tests. |
+| `PDFExtractor` dispatcher | Medium | Tests: filename matching the registered pattern picks the right parser; filename matching nothing yields `unknown_document_type`; the parser's `ExtractionResult` is returned with the registration's IBAN stamped on. |
+| Per-document-type parser modules (`triodos_kontoauszug`, `triodos_kreditkarte`) | High | Golden-file fixtures: one real PDF per document type checked into the repo, expected `ExtractionResult` pinned. Deterministic — no LLM, no network. Add a fixture every time a new edge case (Vorgangstyp, balance straddling Soll/Haben, etc.) gets a code branch. |
 | `ReconciliationValidator` | High | Table-driven tests covering: balanced statement, off-by-€0.01, off-by-cents, sign-flipped row, missing row. |
 | `Fingerprinter` | High | Table-driven tests covering: identical inputs produce identical fingerprint, whitespace/case differences in description don't break dedup, distinct transactions don't collide. |
 | `CounterpartyKeyNormalizer` | High | Table-driven tests for IBAN-present vs IBAN-absent, GmbH/AG suffix stripping, whitespace, casing, common bank-printed noise. |
@@ -143,14 +155,17 @@ No existing codebase to reference for prior art (this PRD scaffolds v1 from scra
 - Per-Owner taxonomies for Categories. Categories are global (ADR-0002).
 - LLM fine-tuning or training infrastructure. Merchant Memory replaces this (ADR-0003).
 - SPA frontend. HTMX-only is the chosen complexity ceiling.
-- Hand-rolled per-bank PDF parsers. They are explicitly *allowed* by the `PDFExtractor` interface but are not built in v1; the LLM-based extractor is the only implementation shipped.
+- Auto-discovery of new Accounts from PDF content. New Accounts are declared in `accounts.toml` before their first PDF arrives (see ADR-0006).
+- Model-based PDF extraction. Rejected in May 2026 prototype testing on accuracy grounds; see ADR-0006. The `LLMPort` seam exists only for categorization.
+- Document types beyond the v1 in-scope list. Adding a new bank/format is post-v1 work.
 - Browser-driven end-to-end tests.
 
 ## Further Notes
 
-- **Hardware prerequisite:** vLLM expects a CUDA-capable GPU. This needs to be in the README's setup section. If a user without a GPU wants to run the project, they'll need to swap the `LLMPort` adapter for an Ollama-backed or `llama.cpp`-backed implementation — the architecture supports this but no second adapter ships in v1.
+- **Local LLM runtime is a deployment choice, not a project commitment.** The project ships one `OpenAICompatibleLLMAdapter` and reads base URL + model name from config. Any runtime that speaks the OpenAI Chat Completions API works. A concrete model/runtime recommendation is deferred until v1 is feature-complete and we can compare options against the real categorization workload. Until then, the README's setup section will document one example configuration sufficient to run the project end-to-end.
+- **Per-document-type parsers are living code.** The expected maintenance posture is: when a Statement fails the Reconciliation Gate or a parser raises on an unfamiliar row, the user extends the relevant parser module with a hard-coded branch (a new Vorgangstyp, a layout shift, a balance row format) and re-ingests. A regression test is added at the same time. This is not a finished-and-frozen feature — it is a manually-extended one, and that is the deliberate trade-off accepted in ADR-0006 against the worse failure mode of model-based extraction.
 - **DuckDB vs SQLite trade-off:** DuckDB was chosen over SQLite for its analytical query strength on dashboard rollups (group-by-category, sum-by-month). DuckDB has weaker write-concurrency, but with a single user and serialized ingest there is no contention. If write contention ever becomes a concern (e.g. concurrent watcher + UI writes), revisit.
 - **Pre-seeded category list** is a v1 starter set — expect it to be tuned during early use. The list itself is not a load-bearing decision; the *fact* of pre-seeding (versus starting empty) is what was settled during design.
 - **Counterparty key normalization rules** are deliberately concentrated in `CounterpartyKeyNormalizer`. If Merchant Memory false-positives or false-negatives ever surface, this module is the only place to look — and the table-driven tests there are where the regression should be added.
 - **The category history table is consulted by Merchant Memory's update rule.** Specifically: a manual correction writes to Merchant Memory only if the most recent prior history row had `source ∈ {llm, memory}` (i.e. this is the *first* user correction for that Counterparty). Subsequent user corrections do not overwrite. This logic lives in `CategoryResolver` (or wherever category mutations are handled) and should be unit-tested.
-- **Future extensibility points** baked into the v1 architecture: per-bank parsers behind `PDFExtractor`, alternative LLM runtimes behind `LLMPort`, alternative storage behind the repository ports. These are not features — they are seams. Resist filling them in until a concrete need emerges.
+- **Future extensibility points** baked into the v1 architecture: additional document-type parsers slot in behind the `PDFExtractor` dispatcher (the seam is exercised in v1 by the two parsers already shipped); alternative LLM runtimes are a config change, not a code change (one OpenAI-compatible adapter covers them all); alternative storage sits behind the repository ports. These are not features — they are seams. Resist filling them in until a concrete need emerges.
